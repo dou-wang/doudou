@@ -1,0 +1,154 @@
+import sensor, image, time, pyb
+from pyb import UART
+from pyb import LED
+
+
+
+red_led    = LED(1)
+green_led  = LED(2)
+blue_led   = LED(3)
+
+red_led.on()
+green_led.on()
+blue_led.on()
+
+sensor.reset()
+sensor.set_pixformat(sensor.RGB565)
+sensor.set_framesize(sensor.QQVGA)#240*320
+sensor.skip_frames(time = 2000)
+sensor.set_auto_whitebal(False)  # Create a clock object to track the FPS.
+sensor.set_auto_gain(False)      # must be turned off for color tracking
+
+clock = time.clock()
+
+uart = UART(3, 115200)
+
+
+
+#白天
+red   = (20,90, 20,80,   35,70)
+green = (20,90, -90,-30, 10,70)
+blue  = (20,90, -30,60,  -100,-10)
+
+
+
+#晚上
+#red   = (40, 55,     60, 70,    30,55)
+#green = (20, 55,    -55,-30,    -10 ,35)
+#blue  = (20, 50,    -20, -0,    -35,-5)
+
+
+
+# 颜色识别区域
+rectX0 = 0
+rectY0 = 10
+rectXL = 160
+rectYL = 40
+
+
+
+# 可以根据旋转角度来过滤线条
+# 限制寻找的直线偏角在此范围里
+MIN_A_X = 170
+MAX_A_X = 10
+
+
+MIN_A_Y = 80
+MAX_A_Y = 100
+
+
+while(True):
+
+    clock.tick()
+
+    img = sensor.snapshot().lens_corr(1.75)
+
+    send = [0XAA,0XB0,0X0B,5,0XFE,0XFE,0XFE,0XFE,0,0]
+    RX = {0}
+    # 巡线
+    # threshold控制从霍夫变换中监测到的直线,只返回大于或等于阈值的
+    # theta_margin和rho_margin控件合并相似的直线,如果两直线的theta和ρ值差异小于边际,则它们合并
+
+    lines = img.find_lines(threshold = 2000, theta_margin = 20, rho_margin = 10)
+
+    if lines:
+
+        for l in range(len(lines)):
+
+            # 在限制的偏转角度内 - X
+            if (MIN_A_X <= lines[l].theta()) or (lines[l].theta() <= MAX_A_X):
+
+                # 获得中线偏差
+                POS_X = lines[l].x1() + lines[l].x2()
+
+                errx = 160 - POS_X
+
+                # 差值X
+                send[4] = errx >> 8
+                send[5] = errx & 0XFF
+
+                x_line = l
+
+                img.draw_line(lines[x_line].line(), color = (0, 0, 0))
+                #print(lines[x_line])
+
+            # 在限制的偏转角度内 - Y
+            if (MIN_A_Y <= lines[l].theta()) and (lines[l].theta() <= MAX_A_Y):
+
+                #获得中线偏差
+                POS_Y = lines[l].y1() + lines[l].y2()
+
+                erry = 120 - POS_Y
+
+                # 差值Y
+                send[6] = erry >> 8
+                send[7] = erry & 0XFF
+
+                y_line = l
+
+                img.draw_line(lines[y_line].line(), color = (0, 0, 0))
+                #print(lines[y_line])
+
+    send[9] = (0XAA+0XB0+0X0B+5+send[4]+send[5]+send[6]+send[7]+send[8])&0XFF # 校验和
+    for a in range(10):
+        uart.writechar(send[a])
+
+    # 颜色识别
+    # 红
+    for blobs in img.find_blobs([red],merge=True,y_stride = 10,area_threshold = 50,roi = [rectX0,rectY0,rectXL,rectYL]):
+        if blobs:
+            #red_led.on()
+            img.draw_rectangle(blobs.rect(),(255,0,0))
+            send[8] = 1 # 颜色值
+            send[9] = (0XAA+0XB0+0X0B+5+send[4]+send[5]+send[6]+send[7]+send[8])&0XFF # 校验和
+            for a in range(10):
+                uart.writechar(send[a])
+
+    # 绿
+    for blobs in img.find_blobs([green],merge=True,y_stride = 10,area_threshold = 50,roi = [rectX0,rectY0,rectXL,rectYL]):
+        if blobs:
+            #green_led.on()
+            img.draw_rectangle(blobs.rect(),(0,255,0))
+            send[8] = 2 # 颜色值
+            send[9] = (0XAA+0XB0+0X0B+5+send[4]+send[5]+send[6]+send[7]+send[8])&0XFF # 校验和
+            for a in range(10):
+                uart.writechar(send[a])
+
+    # 蓝
+    for blobs in img.find_blobs([blue],merge=True,y_stride = 10,area_threshold = 50,roi = [rectX0,rectY0,rectXL,rectYL]):
+        if blobs:
+            #blue_led.on()
+            img.draw_rectangle(blobs.rect(),(0,0,255))
+            send[8] = 3 # 颜色值
+            send[9] = (0XAA+0XB0+0X0B+5+send[4]+send[5]+send[6]+send[7]+send[8])&0XFF # 校验和
+            for a in range(10):
+                uart.writechar(send[a])
+
+    #img.draw_rectangle([rectX0,rectY0,rectXL,rectYL],(0,0,0))
+
+
+    red_led.off()
+    green_led.off()
+    blue_led.off()
+
+    print(clock.fps())
